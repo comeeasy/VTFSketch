@@ -33,22 +33,22 @@ class BestModelSelector:
                 torch.save(self.model.state_dict(), save_path)
                 print(f"Model saved with {self.metric}: {v_metric:.4f}")
         
-def inference_logits(model, vtf):
+def inference_logits(model, vtf, img):
     model = model.eval()
     
     with torch.no_grad():
-        pred_target = model(vtf)  # [B x W x H x 1]
+        pred_target = model(vtf, img)  # [B x W x H x 1]
 
         # Apply sigmoid to get probabilities
         pred_target = torch.sigmoid(pred_target)
 
     return pred_target
 
-def inference(model, vtf):
+def inference(model, vtf, img):
     model = model.eval()
     
     with torch.no_grad():
-        pred_target = model(vtf)  # [B x W x H x 1]
+        pred_target = model(vtf, img)  # [B x W x H x 1]
 
         # Apply sigmoid to get probabilities
         pred_target = torch.sigmoid(pred_target)

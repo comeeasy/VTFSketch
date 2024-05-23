@@ -14,8 +14,12 @@ from src.models import FPathPredictor, UNetFPathPredictor
 from src.losses import FocalLoss, SketchMaskLoss
 from src.utils import inference, inference_logits, BestModelSelector
 
-
 torch.backends.cudnn.enabled = False
+
+import wandb
+
+
+
 
 def train(model, optimizer, objective, train_loader, accelerator):
     model.train()
@@ -26,14 +30,18 @@ def train(model, optimizer, objective, train_loader, accelerator):
         img = img.to(accelerator.device)
         target = target.to(accelerator.device)
         
-        pred_target = model(vtf) 
+        pred_target = model(vtf, img) 
         
-        loss = objective(pred_target, target)
+        # mask = vtf[:, 10, :, :] != 1.0 # infodraw
+        mask = None
+        loss = objective(pred_target, target, mask)
         cum_loss += loss.detach().item() / len(train_loader)
         
         optimizer.zero_grad()
         accelerator.backward(loss)
         optimizer.step()
+    
+    wandb.log({"train_loss": cum_loss})
     print(f"train loss: {cum_loss}")
 
 def val(model, objective, val_loader, epoch, accelerator, model_selector: BestModelSelector):
@@ -48,28 +56,25 @@ def val(model, objective, val_loader, epoch, accelerator, model_selector: BestMo
             img = img.to(accelerator.device)
             target = target.to(accelerator.device)
         
-            pred_target = inference_logits(model, vtf)
+            pred_target = inference_logits(model, vtf, img)
         
-            loss = objective(pred_target, target)
+            # mask = vtf[:, 10, :, :] != 1.0 # infodraw
+            mask = None
+            loss = objective(pred_target, target, mask)
             cum_loss += loss.detach().item() / len(val_loader)
             
-            pre_target_one_zero = inference(model, vtf)
+            pre_target_one_zero = inference(model, vtf, img)
+            
+            images = wandb.Image(pre_target_one_zero, caption="Top: Output, Bottom: Input")
+            wandb.log({"val_results": images})
+            
             all_preds.append(pre_target_one_zero.cpu().numpy())
             all_targets.append(target.cpu().numpy())
-            
+    
+    wandb.log({"val_loss": cum_loss})
     print(f"[EPOCH {epoch}] val loss: {cum_loss}")
 
-    all_preds = np.concatenate(all_preds).flatten()
-    all_targets = np.concatenate(all_targets).flatten()
-    all_preds = 1 - all_preds # 스케치(검정==0)와 배경(흰색==1) 을 역전
-    all_targets = 1 - all_targets # 스케치(검정==0)와 배경(흰색==1) 을 역전
-
-    precision = precision_score(all_targets, all_preds)
-    recall = recall_score(all_targets, all_preds)
-    print(f"[EPOCH {epoch}] Precision: {precision:.4f}")
-    print(f"[EPOCH {epoch}] Recall   : {recall:.4f}")
-    
-    model_selector.update(v_metric=recall, epoch=epoch, save=True)
+    model_selector.update(v_metric=cum_loss, epoch=epoch, save=True)
 
 def test(model, test_loader, accelerator):
     model.eval()
@@ -82,7 +87,7 @@ def test(model, test_loader, accelerator):
             img = img.to(accelerator.device)
             target = target.to(accelerator.device)
             
-            pred_target = inference(model, vtf)
+            pred_target = inference(model, vtf, img)
 
             all_preds.append(pred_target.cpu().numpy())
             all_targets.append(target.cpu().numpy())
@@ -95,6 +100,12 @@ def test(model, test_loader, accelerator):
     precision = precision_score(all_targets, all_preds)
     recall = recall_score(all_targets, all_preds)
     f1 = f1_score(all_targets, all_preds)
+
+    wandb.log({
+        "test_precision": precision,
+        "test_recall"   : recall,
+        "test_f1score"   : f1,
+    })
 
     print(f"Precision: {precision:.4f}")
     print(f"Recall: {recall:.4f}")
@@ -114,6 +125,14 @@ def main():
 
     args = parser.parse_args()
 
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="VTFPredictor",
+
+        # track hyperparameters and run metadata
+        config=vars(args)
+    )
+
     print(f"============ Parameters ==================")
     for k, v in vars(args).items():
         print(f"[{k:20s}]: {v}")
@@ -130,18 +149,20 @@ def main():
     elif args.model_name == "UNetFPathPredictor":
         model = UNetFPathPredictor()
         
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     objective = SketchMaskLoss()
+    optimizer = optim.AdamW(list(model.parameters()) + list(objective.parameters()), lr=args.learning_rate)
     # objective = FocalLoss(alpha=10000, gamma=100).to('cuda') # gamma = focusing factor, easy negative case에 대하여 더 큰 패널티를 줌.
     # objective = nn.BCEWithLogitsLoss().to('cuda')
 
-    model_selector = BestModelSelector(model=model, args=args, metric="recall", mode="max")
+    model_selector = BestModelSelector(model=model, args=args, metric="loss", mode="min")
 
     accelerator = Accelerator()
     model, train_loader, val_loader, test_loader = accelerator.prepare(model, train_loader, val_loader, test_loader)
     for epoch in range(args.epochs):
         train(model, optimizer, objective, train_loader, accelerator)
         val(model, objective, val_loader, epoch, accelerator, model_selector)
+        if (epoch+1) % 5 == 0:
+            test(model, test_loader, accelerator)        
         
     test(model, test_loader, accelerator)
 

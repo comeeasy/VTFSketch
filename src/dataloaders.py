@@ -24,12 +24,13 @@ class FPathDataset(Dataset):
         _len = len(self.data)
         self.vtfs    = [VTFPreprocessor.get(self.data[idx]['vtf']) for idx in range(_len)]
         self.targets = [TargetPreprocessor.get(self.data[idx]['target']) for idx in range(_len)]
+        self.imgs    = [ImagePreprocessor.get(self.data[idx]['img']) for idx in range(_len)]
     
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
-        return self.vtfs[index], self.targets[index]
+        return self.vtfs[index], self.imgs[index], self.targets[index]
 
 def get_FPathDatasets(args):
     train_dset = FPathDataset(args.train_yaml)
@@ -64,12 +65,12 @@ def get_FPathUNetDataset(args):
 
 
 def get_data_loaders(args, mode="FPathDataset"):
-    if   mode == "FPathDataset":
+    if   mode == "FPathPredictor":
         train_dset, valid_dset, test_dset = get_FPathDatasets(args)
     elif mode == "UNetFPathPredictor":
         train_dset, valid_dset, test_dset = get_FPathUNetDataset(args)
     else:
-        raise RuntimeError("model_name must be [\"FPathDataset\" or \"UNetFPathPredictor\"]")
+        raise RuntimeError("model_name must be [\"FPathPredictor\" or \"UNetFPathPredictor\"]")
     
     train_loader = DataLoader(
         train_dset,

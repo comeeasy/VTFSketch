@@ -3,12 +3,17 @@ from PIL import Image
 
 import torch
 from torchvision.transforms import transforms
+from torchvision.transforms import InterpolationMode
 
 
 
 class TargetPreprocessor:
 
-    target_transforms = transforms.ToTensor()
+    target_transforms = transforms.Compose([
+        transforms.ToTensor(),    
+        transforms.Resize(512, interpolation=InterpolationMode.NEAREST),
+    ])
+    
 
     @staticmethod
     def get(target_path):
@@ -27,7 +32,10 @@ class TargetPreprocessor:
 
 class TargetPreprocessorUNet:
 
-    target_transforms = transforms.ToTensor()
+    target_transforms = transforms.Compose([
+        transforms.ToTensor(),    
+        transforms.Resize(512, interpolation=InterpolationMode.NEAREST),
+    ])
 
     @staticmethod
     def get(target_path):
@@ -73,11 +81,16 @@ class VTFPreprocessorUNet:
         # 문제가 있어서 이를 해결
         # vtf[np.where(vtf > 1.0)] = 1
         vtf = vtf.transpose((2, 0, 1))
+        vtf = vtf[:, ::2, ::2]
         return np.clip(vtf, 0.0, 1.0)
     
 class ImagePreprocessor:
     
-    img_transforms = transforms.ToTensor()
+    img_transforms = transforms.Compose([
+        transforms.ToTensor(),    
+        transforms.Resize(512, interpolation=InterpolationMode.BICUBIC),
+    ])
+
     
     @staticmethod
     def get(img_path):
@@ -87,5 +100,7 @@ class ImagePreprocessor:
 
     @staticmethod
     def __preprocess(img):
-        return ImagePreprocessor.img_transforms(img)
+        img = ImagePreprocessor.img_transforms(img)
+        img = img.permute((0, 2, 1)) # [3 x H x W] -> [3 x W x H]
+        return img
     

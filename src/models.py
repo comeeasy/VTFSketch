@@ -107,56 +107,58 @@ class NaiveTransposedCNNBlock(nn.Module):
     
 
 class UNetFPathPredictor(nn.Module):
-    def __init__(self, in_channel=21, out_channel=1):
+    def __init__(self, in_channel=21 + 3, out_channel=1):
         super().__init__()
         
         self.encoder1 = nn.Sequential(
-            NaiveCNNBlock(in_channel=21, out_channel=64, kernel_size=21, stride=1, padding=10),
-            NaiveCNNBlock(in_channel=64, out_channel=64, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=in_channel, out_channel=64, kernel_size=21, stride=1, padding=10),
+            NaiveCNNBlock(in_channel=64, out_channel=64, kernel_size=3, stride=1, padding=1),
         )
         self.encoder2 = nn.Sequential(
-            NaiveCNNBlock(in_channel=64, out_channel=128, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=128, out_channel=128, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=64, out_channel=128, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=128, out_channel=128, kernel_size=3, stride=1, padding=1),
         )
         self.encoder3 = nn.Sequential(
-            NaiveCNNBlock(in_channel=128, out_channel=256, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=256, out_channel=256, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=128, out_channel=256, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=256, out_channel=256, kernel_size=3, stride=1, padding=1),
         )
         self.encoder4 = nn.Sequential(
-            NaiveCNNBlock(in_channel=256, out_channel=512, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=512, out_channel=512, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=256, out_channel=512, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=512, out_channel=512, kernel_size=3, stride=1, padding=1),
         )
         self.encoder5 = nn.Sequential(
-            NaiveCNNBlock(in_channel=512, out_channel=1024, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=1024, out_channel=1024, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=512, out_channel=1024, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=1024, out_channel=1024, kernel_size=3, stride=1, padding=1),
         )
         self.decoder1 = nn.Sequential(
-            NaiveCNNBlock(in_channel=128, out_channel=64, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=64, out_channel=64, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=64, out_channel=1, kernel_size=1, stride=1, padding=0, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=128, out_channel=64, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=64, out_channel=64, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=64, out_channels=out_channel, kernel_size=1, stride=1, padding=0),
         )
         self.decoder2 = nn.Sequential(
-            NaiveCNNBlock(in_channel=256, out_channel=128, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=128, out_channel=128, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=256, out_channel=128, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=128, out_channel=128, kernel_size=3, stride=1, padding=1),
         )
         self.decoder3 = nn.Sequential(
-            NaiveCNNBlock(in_channel=512, out_channel=256, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=256, out_channel=256, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=512, out_channel=256, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=256, out_channel=256, kernel_size=3, stride=1, padding=1),
         )
         self.decoder4 = nn.Sequential(
-            NaiveCNNBlock(in_channel=1024, out_channel=512, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
-            NaiveCNNBlock(in_channel=512, out_channel=512, kernel_size=3, stride=1, padding=1, dropout_p=0.5),
+            NaiveCNNBlock(in_channel=1024, out_channel=512, kernel_size=3, stride=1, padding=1),
+            NaiveCNNBlock(in_channel=512, out_channel=512, kernel_size=3, stride=1, padding=1),
         )
-        self.up_conv21 = NaiveTransposedCNNBlock(in_channel=128, out_channel=64, dropout_p=0.5)
-        self.up_conv32 = NaiveTransposedCNNBlock(in_channel=256, out_channel=128, dropout_p=0.5)
-        self.up_conv43 = NaiveTransposedCNNBlock(in_channel=512, out_channel=256, dropout_p=0.5)
-        self.up_conv54 = NaiveTransposedCNNBlock(in_channel=1024, out_channel=512, dropout_p=0.5)
+        self.up_conv21 = NaiveTransposedCNNBlock(in_channel=128, out_channel=64)
+        self.up_conv32 = NaiveTransposedCNNBlock(in_channel=256, out_channel=128)
+        self.up_conv43 = NaiveTransposedCNNBlock(in_channel=512, out_channel=256)
+        self.up_conv54 = NaiveTransposedCNNBlock(in_channel=1024, out_channel=512)
         self.down_sample12 = nn.MaxPool2d(2, 2)
         self.down_sample23 = nn.MaxPool2d(2, 2)
         self.down_sample34 = nn.MaxPool2d(2, 2)
         self.down_sample45 = nn.MaxPool2d(2, 2)
         
-    def forward(self, x):
+    def forward(self, vtf, img):
+        x = torch.concat([vtf, img], dim=1)
+        
         x1 = self.encoder1(x)
         x2 = self.encoder2(self.down_sample12(x1))
         x3 = self.encoder3(self.down_sample23(x2))
