@@ -2,3 +2,5 @@ checkpoints/
 dataset/
 results/
 *.png
+wandb/
+nohup.out

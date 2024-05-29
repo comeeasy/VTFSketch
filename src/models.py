@@ -1,7 +1,119 @@
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.init as init
+import torch.optim as optim
 
+import wandb
+import lightning as L
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+from src.losses import SketchMaskLoss, SketchNoiseMaskLoss
+
+
+
+# Training, Validation, and Test Functions
+class VTFPredictor(L.LightningModule):
+    def __init__(self, model_name, learning_rate, batch_size, num_workers, loss_name):
+        super(VTFPredictor, self).__init__()
+        self.save_hyperparameters()
+        if model_name == "FPathPredictor":
+            self.model = FPathPredictor()
+        elif model_name == "UNetFPathPredictor":
+            self.model = UNetFPathPredictor()
+        
+        self.loss_name = loss_name
+        if loss_name == "SketchMaskLoss":
+            self.objective = SketchMaskLoss()
+        elif loss_name == "SketchNoiseMaskLoss":
+            self.objective = SketchNoiseMaskLoss()
+        
+        self.learning_rate = learning_rate
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        
+        self.validation_step_outputs = []
+        self.test_step_outputs = []
+
+    def forward(self, vtf, img):
+        return self.model(vtf, img)
+
+    def inference(self, vtf, img):
+        return torch.tensor(self(vtf, img).clone().detach() > 0.5, dtype=torch.float32)
+
+    def configure_optimizers(self):
+        return optim.AdamW(list(self.model.parameters()) + list(self.objective.parameters()), lr=self.learning_rate)
+
+    def calculate_loss(self, pred_target, target, vtf):
+        if self.loss_name == "SketchMaskLoss":
+            loss = self.objective(pred_target, target, None)
+        elif self.loss_name == "SketchNoiseMaskLoss":
+            loss = self.objective(pred_target, target, vtf[:, 10, :, :]) # 10번째 channel에 infodraw가 저장
+        else:
+            raise RuntimeError("Spcify correct loss. in [\"SketchMaskLoss\", \"SketchNoiseMaskLoss\"]")
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        vtf, img, target = batch
+        pred_target = self(vtf, img)
+        
+        loss = self.calculate_loss(pred_target=pred_target, target=target, vtf=vtf)
+        
+        self.log("train_loss", loss, sync_dist=True)
+        print(f"train_loss: {loss}")
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        vtf, img, target = batch
+        pred_target = self.model(vtf, img)
+        loss = self.calculate_loss(pred_target=pred_target, target=target, vtf=vtf)
+        self.log("val_loss", loss, sync_dist=True)
+        print(f"val_loss: {loss}")
+        # pred_target = self.inference(vtf, img)
+        images = wandb.Image((pred_target > 0.5).float(), caption="val results")
+        self.logger.experiment.log({"val_results": images})
+        self.validation_step_outputs.append({"preds": pred_target, "targets": target})
+
+    def test_step(self, batch, batch_idx):
+        vtf, img, target = batch
+        # pred_target = self.inference(vtf, img)
+        pred_target = self(vtf, img)
+        self.test_step_outputs.append({"preds": pred_target, "targets": target})
+
+    def on_validation_epoch_end(self):
+        outputs = self.validation_step_outputs
+        
+        all_preds = np.concatenate([x["preds"].cpu().numpy() > 0.5 for x in outputs]).flatten()
+        all_targets = np.concatenate([x["targets"].cpu().numpy() > 0.5 for x in outputs]).flatten()
+        all_preds = 1 - all_preds
+        all_targets = 1 - all_targets
+        precision = precision_score(all_targets, all_preds)
+        recall = recall_score(all_targets, all_preds)
+        f1 = f1_score(all_targets, all_preds)
+        self.log("val_precision", precision, sync_dist=True)
+        self.log("val_recall", recall, sync_dist=True)
+        self.log("val_f1score", f1, sync_dist=True)
+        print(f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
+        
+        self.validation_step_outputs.clear()
+
+    def on_test_epoch_end(self):
+        outputs = self.test_step_outputs
+        
+        all_preds = np.concatenate([x["preds"].cpu().numpy() for x in outputs]).flatten()
+        all_targets = np.concatenate([x["targets"].cpu().numpy() for x in outputs]).flatten()
+        all_preds = 1 - all_preds
+        all_targets = 1 - all_targets
+        precision = precision_score(all_targets, all_preds)
+        recall = recall_score(all_targets, all_preds)
+        f1 = f1_score(all_targets, all_preds)
+        self.log("test_precision", precision, sync_dist=True)
+        self.log("test_recall", recall, sync_dist=True)
+        self.log("test_f1score", f1, sync_dist=True)
+        print(f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
+
+        self.test_step_outputs.clear()
 
 
 class ResFCLayer(nn.Module):
@@ -42,29 +154,31 @@ class FPathPredictor(nn.Module):
         
         self.layer1 = nn.Sequential(
             ResFCLayer(in_channel, 128, bias=True),
-            ResFCLayer(128, 128, dropout_p=0.5, bias=False),
+            ResFCLayer(128, 128, bias=False),
         )
         
         self.final_layer = nn.Sequential(
             nn.Linear(128, out_channel, bias=True)
         )
         
-        
-    def forward(self, x):
+    def forward(self, vtf, img):
+        x = vtf.permute((0, 2, 3, 1))
         out = self.layer1(x)
         out = self.final_layer(out)
         
-        return out
+        out = out.permute((0, 3, 1, 2))
+        return torch.sigmoid(out)
 
 class NaiveCNNBlock(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel_size, stride, padding, dropout_p=0.0):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dropout_p=0.0):
         super(NaiveCNNBlock, self).__init__()
         self.layer = nn.Sequential(
-            nn.Conv2d(in_channel, out_channel, kernel_size=kernel_size, stride=stride, padding=padding),
-            nn.BatchNorm2d(out_channel),
+            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             nn.Dropout2d(p=dropout_p),
         )
+        self.__init_layer()
     
     def __init_layer(self):
         # Initialize the weights of the Conv2d layer
@@ -74,7 +188,6 @@ class NaiveCNNBlock(nn.Module):
             elif isinstance(module, nn.BatchNorm2d):
                 nn.init.constant_(module.weight, 1)
                 nn.init.constant_(module.bias, 0)
-        
     
     def forward(self, x):
         return self.layer(x)
@@ -101,78 +214,75 @@ class NaiveTransposedCNNBlock(nn.Module):
                 nn.init.constant_(module.weight, 1)
                 nn.init.constant_(module.bias, 0)
         
-    
     def forward(self, x):
         return self.layer(x)
     
 
 class UNetFPathPredictor(nn.Module):
-    def __init__(self, in_channel=21 + 3, out_channel=1):
-        super().__init__()
-        
-        self.encoder1 = nn.Sequential(
-            NaiveCNNBlock(in_channel=in_channel, out_channel=64, kernel_size=21, stride=1, padding=10),
-            NaiveCNNBlock(in_channel=64, out_channel=64, kernel_size=3, stride=1, padding=1),
-        )
-        self.encoder2 = nn.Sequential(
-            NaiveCNNBlock(in_channel=64, out_channel=128, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=128, out_channel=128, kernel_size=3, stride=1, padding=1),
-        )
-        self.encoder3 = nn.Sequential(
-            NaiveCNNBlock(in_channel=128, out_channel=256, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=256, out_channel=256, kernel_size=3, stride=1, padding=1),
-        )
-        self.encoder4 = nn.Sequential(
-            NaiveCNNBlock(in_channel=256, out_channel=512, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=512, out_channel=512, kernel_size=3, stride=1, padding=1),
-        )
-        self.encoder5 = nn.Sequential(
-            NaiveCNNBlock(in_channel=512, out_channel=1024, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=1024, out_channel=1024, kernel_size=3, stride=1, padding=1),
-        )
-        self.decoder1 = nn.Sequential(
-            NaiveCNNBlock(in_channel=128, out_channel=64, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=64, out_channel=64, kernel_size=3, stride=1, padding=1),
-            nn.Conv2d(in_channels=64, out_channels=out_channel, kernel_size=1, stride=1, padding=0),
-        )
-        self.decoder2 = nn.Sequential(
-            NaiveCNNBlock(in_channel=256, out_channel=128, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=128, out_channel=128, kernel_size=3, stride=1, padding=1),
-        )
-        self.decoder3 = nn.Sequential(
-            NaiveCNNBlock(in_channel=512, out_channel=256, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=256, out_channel=256, kernel_size=3, stride=1, padding=1),
-        )
-        self.decoder4 = nn.Sequential(
-            NaiveCNNBlock(in_channel=1024, out_channel=512, kernel_size=3, stride=1, padding=1),
-            NaiveCNNBlock(in_channel=512, out_channel=512, kernel_size=3, stride=1, padding=1),
-        )
-        self.up_conv21 = NaiveTransposedCNNBlock(in_channel=128, out_channel=64)
-        self.up_conv32 = NaiveTransposedCNNBlock(in_channel=256, out_channel=128)
-        self.up_conv43 = NaiveTransposedCNNBlock(in_channel=512, out_channel=256)
-        self.up_conv54 = NaiveTransposedCNNBlock(in_channel=1024, out_channel=512)
-        self.down_sample12 = nn.MaxPool2d(2, 2)
-        self.down_sample23 = nn.MaxPool2d(2, 2)
-        self.down_sample34 = nn.MaxPool2d(2, 2)
-        self.down_sample45 = nn.MaxPool2d(2, 2)
-        
+    def __init__(self, in_channels=24, out_channels=1, init_features=64, num_layers=5, dropout_p=0.0):
+        super(UNetFPathPredictor, self).__init__()
+
+        self.encoders = nn.ModuleList()
+        self.decoders = nn.ModuleList()
+        self.up_convs = nn.ModuleList()
+
+        # Initialize the encoder blocks
+        features = init_features
+        for i in range(num_layers):
+            self.encoders.append(
+                self._block(
+                        in_channels=in_channels if i == 0 else features // 2, 
+                        features=features,
+                        kernel_size=7 if i == 0 else 3,
+                        stride=1,
+                        padding=3 if i == 0 else 1,
+                        dropout_p=dropout_p,
+                )
+            )
+            features *= 2
+
+        # Initialize the upsampling and decoder blocks
+        for i in range(num_layers - 1, 0, -1):
+            features //= 2
+            self.up_convs.append(NaiveTransposedCNNBlock(features, features // 2, dropout_p=dropout_p))
+            self.decoders.append(
+                self._block(
+                    in_channels=features, 
+                    features=features // 2, 
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    dropout_p=dropout_p
+                )
+            )
+
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.final_conv = nn.Conv2d(features // 2, out_channels, kernel_size=1)
+
     def forward(self, vtf, img):
-        x = torch.concat([vtf, img], dim=1)
-        
-        x1 = self.encoder1(x)
-        x2 = self.encoder2(self.down_sample12(x1))
-        x3 = self.encoder3(self.down_sample23(x2))
-        x4 = self.encoder4(self.down_sample34(x3))
-        x5 = self.encoder5(self.down_sample45(x4))
-        
-        u4 = torch.concat([x4, self.up_conv54(x5)], dim=1)
-        u4 = self.decoder4(u4)
-        u3 = torch.concat([x3, self.up_conv43(u4)], dim=1)
-        u3 = self.decoder3(u3)
-        u2 = torch.concat([x2, self.up_conv32(u3)], dim=1)
-        u2 = self.decoder2(u2)
-        u1 = torch.concat([x1, self.up_conv21(u2)], dim=1)
-        
-        out = self.decoder1(u1)
-        
-        return out
+        x = torch.cat([vtf, img], dim=1)
+        enc_features = []
+
+        # Encoder path
+        for encoder in self.encoders:
+            x = encoder(x)
+            enc_features.append(x)
+            x = self.pool(x)
+
+        # Bottleneck
+        bottleneck = enc_features[-1]
+        enc_features = enc_features[:-1][::-1]
+
+        # Decoder path
+        for idx, (up_conv, decoder) in enumerate(zip(self.up_convs, self.decoders)):
+            bottleneck = up_conv(bottleneck)
+            bottleneck = torch.cat((bottleneck, enc_features[idx]), dim=1)
+            bottleneck = decoder(bottleneck)
+
+        return torch.sigmoid(self.final_conv(bottleneck))
+
+    def _block(self, in_channels, features, kernel_size, stride, padding, dropout_p):
+        return nn.Sequential(
+            NaiveCNNBlock(in_channels=in_channels, out_channels=features, kernel_size=kernel_size, stride=stride, padding=padding, dropout_p=dropout_p),
+            NaiveCNNBlock(in_channels=features, out_channels=features, kernel_size=kernel_size, stride=stride, padding=padding, dropout_p=dropout_p)
+        )

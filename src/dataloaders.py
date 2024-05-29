@@ -1,9 +1,11 @@
 from torch.utils.data import Dataset, DataLoader
 
+import lightning as L
+
 from src.preprocesses import (
-    TargetPreprocessor, VTFPreprocessor, 
-    ImagePreprocessor, VTFPreprocessorUNet,
-    TargetPreprocessorUNet
+    TargetPreprocessor, 
+    VTFPreprocessor, 
+    ImagePreprocessor,
 )
 
 
@@ -32,21 +34,14 @@ class FPathDataset(Dataset):
     def __getitem__(self, index):
         return self.vtfs[index], self.imgs[index], self.targets[index]
 
-def get_FPathDatasets(args):
-    train_dset = FPathDataset(args.train_yaml)
-    valid_dset = FPathDataset(args.val_yaml)
-    test_dset = FPathDataset(args.test_yaml)
-    
-    return train_dset, valid_dset, test_dset
-
 class UNetFPathDataset(Dataset):
     def __init__(self, config_path) -> None:
         super().__init__()
         self.data = load_data_dict_from_yaml(config_path)
 
         _len = len(self.data)
-        self.vtfs    = [VTFPreprocessorUNet.get(self.data[idx]['vtf']) for idx in range(_len)]
-        self.targets = [TargetPreprocessorUNet.get(self.data[idx]['target']) for idx in range(_len)]
+        self.vtfs    = [VTFPreprocessor.get(self.data[idx]['vtf']) for idx in range(_len)]
+        self.targets = [TargetPreprocessor.get(self.data[idx]['target']) for idx in range(_len)]
         self.imgs    = [ImagePreprocessor.get(self.data[idx]['img']) for idx in range(_len)]
     
     def __len__(self):
@@ -54,45 +49,66 @@ class UNetFPathDataset(Dataset):
 
     def __getitem__(self, index):
         return self.vtfs[index], self.imgs[index], self.targets[index]
-
-def get_FPathUNetDataset(args):
-    train_dset = UNetFPathDataset(args.train_yaml)
-    valid_dset = UNetFPathDataset(args.val_yaml)
-    test_dset = UNetFPathDataset(args.test_yaml)
     
-    return train_dset, valid_dset, test_dset
-
-
-
-def get_data_loaders(args, mode="FPathDataset"):
-    if   mode == "FPathPredictor":
-        train_dset, valid_dset, test_dset = get_FPathDatasets(args)
-    elif mode == "UNetFPathPredictor":
-        train_dset, valid_dset, test_dset = get_FPathUNetDataset(args)
-    else:
-        raise RuntimeError("model_name must be [\"FPathPredictor\" or \"UNetFPathPredictor\"]")
+class UNetFPathLazyDataset(Dataset):
+    def __init__(self, config_path) -> None:
+        super().__init__()
+        self.data = load_data_dict_from_yaml(config_path)
     
-    train_loader = DataLoader(
-        train_dset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        pin_memory=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-    )
-    val_loader = DataLoader(
-        valid_dset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=True,
-    )
-    test_loader = DataLoader(
-        test_dset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=True,
-    )
-    
-    return train_loader, val_loader, test_loader
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        vtf_path = self.data[index]['vtf']
+        img_path = self.data[index]['img']
+        target_path = self.data[index]['target']
+        
+        vtf = VTFPreprocessor.get(vtf_path=vtf_path)
+        img = ImagePreprocessor.get(img_path=img_path)
+        target = TargetPreprocessor.get(target_path=target_path)
+        
+        return vtf, img, target
+
+
+class FPathDataModule(L.LightningDataModule):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+
+    def setup(self, stage=None):
+        if self.args.use_lazy_loader:
+            self.train_dataset = UNetFPathLazyDataset(self.args.train_yaml)
+            self.val_dataset = UNetFPathLazyDataset(self.args.val_yaml)
+            self.test_dataset = UNetFPathLazyDataset(self.args.test_yaml)
+        else:
+            self.train_dataset = UNetFPathDataset(self.args.train_yaml)
+            self.val_dataset = UNetFPathDataset(self.args.val_yaml)
+            self.test_dataset = UNetFPathDataset(self.args.test_yaml)
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.args.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            num_workers=self.args.num_workers,
+            drop_last=True,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.args.batch_size,
+            shuffle=False,
+            pin_memory=True,
+            num_workers=self.args.num_workers,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.args.batch_size,
+            shuffle=False,
+            pin_memory=True,
+            num_workers=self.args.num_workers,
+        )
