@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.optim as optim
+import torchmetrics
 
 import wandb
 import lightning as L
@@ -23,11 +24,13 @@ class VTFPredictor(L.LightningModule):
         elif model_name == "UNetFPathPredictor":
             self.model = UNetFPathPredictor()
         
+        
         self.loss_name = loss_name
+        self.threshold_W = 0.99
         if loss_name == "SketchMaskLoss":
             self.objective = SketchMaskLoss()
         elif loss_name == "SketchNoiseMaskLoss":
-            self.objective = SketchNoiseMaskLoss()
+            self.objective = SketchNoiseMaskLoss(threshold_W=self.threshold_W)
         
         self.learning_rate = learning_rate
         self.batch_size = batch_size
@@ -35,28 +38,39 @@ class VTFPredictor(L.LightningModule):
         
         self.validation_step_outputs = []
         self.test_step_outputs = []
+        
+        self.f1score    = torchmetrics.F1Score(task='binary')
+        self.recall     = torchmetrics.Recall(task='binary')
+        self.precision  = torchmetrics.Precision(task='binary')
 
-    def forward(self, vtf, img):
-        return self.model(vtf, img)
+    def forward(self, vtf, img, infodraw):
+        return self.model(vtf, img, infodraw)
 
-    def inference(self, vtf, img):
-        return torch.tensor(self(vtf, img).clone().detach() > 0.5, dtype=torch.float32)
+    def inference(self, vtf, img, infodraw):
+        pred = self(vtf=vtf, img=img, infodraw=infodraw)
+        
+        mask = infodraw < self.threshold_W
+        infodraw[torch.where(mask)] = pred[torch.where(mask)]
+        
+        result = torch.tensor(infodraw.clone().detach() > 0.5, dtype=torch.float32)
+        
+        return pred, result
 
     def configure_optimizers(self):
-        return optim.AdamW(list(self.model.parameters()) + list(self.objective.parameters()), lr=self.learning_rate)
+        return optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
     def calculate_loss(self, pred_target, target, infodraw):
         if self.loss_name == "SketchMaskLoss":
             loss = self.objective(pred_target, target, None)
         elif self.loss_name == "SketchNoiseMaskLoss":
-            loss = self.objective(pred_target, target, infodraw) # 10번째 channel에 infodraw가 저장
+            loss = self.objective(pred_target, target, infodraw)
         else:
             raise RuntimeError("Spcify correct loss. in [\"SketchMaskLoss\", \"SketchNoiseMaskLoss\"]")
         return loss
 
     def training_step(self, batch, batch_idx):
         vtf, img, infodraw, target = batch
-        pred_target = self(vtf, img)
+        pred_target = self(vtf=vtf, img=img, infodraw=infodraw)
         
         loss = self.calculate_loss(pred_target=pred_target, target=target, infodraw=infodraw)
         
@@ -66,54 +80,54 @@ class VTFPredictor(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         vtf, img, infodraw, target = batch
-        pred_target = self.model(vtf, img)
+        pred_target, result = self.inference(vtf=vtf, img=img, infodraw=infodraw)
         loss = self.calculate_loss(pred_target=pred_target, target=target, infodraw=infodraw)
         self.log("val_loss", loss, sync_dist=True)
-        # print(f"val_loss: {loss}")
-        # pred_target = self.inference(vtf, img)
-        images = wandb.Image((pred_target > 0.5).float(), caption="val results")
+        
+        images = wandb.Image(result, caption="val results")
         self.logger.experiment.log({"val_results": images})
-        self.validation_step_outputs.append({"preds": pred_target, "targets": target})
+        
+        # 하얀 배경이 아닌 스케치를 정답으로 삼음
+        self.f1score.update(1-result, 1-target) 
+        self.recall.update(1-result, 1-target)
+        self.precision.update(1-result, 1-target)
 
     def test_step(self, batch, batch_idx):
         vtf, img, infodraw, target = batch
-        # pred_target = self.inference(vtf, img)
-        pred_target = self(vtf, img)
-        self.test_step_outputs.append({"preds": pred_target, "targets": target})
+        _, result = self.inference(vtf=vtf, img=img, infodraw=infodraw)
+
+        self.f1score.update(1-result, 1-target) 
+        self.recall.update(1-result, 1-target)
+        self.precision.update(1-result, 1-target)
 
     def on_validation_epoch_end(self):
-        outputs = self.validation_step_outputs
-        
-        all_preds = np.concatenate([x["preds"].cpu().numpy() > 0.5 for x in outputs]).flatten()
-        all_targets = np.concatenate([x["targets"].cpu().numpy() > 0.5 for x in outputs]).flatten()
-        all_preds = 1 - all_preds
-        all_targets = 1 - all_targets
-        precision = precision_score(all_targets, all_preds)
-        recall = recall_score(all_targets, all_preds)
-        f1 = f1_score(all_targets, all_preds)
+        # Compute the final metric values
+        f1 = self.f1score.compute()
+        recall = self.recall.compute()
+        precision = self.precision.compute()
+
         self.log("val_precision", precision, sync_dist=True)
         self.log("val_recall", recall, sync_dist=True)
         self.log("val_f1score", f1, sync_dist=True)
-        print(f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
-        
-        self.validation_step_outputs.clear()
+
+        # Reset metrics after computation
+        self.f1score.reset()
+        self.recall.reset()
+        self.precision.reset()
 
     def on_test_epoch_end(self):
-        outputs = self.test_step_outputs
-        
-        all_preds = np.concatenate([x["preds"].cpu().numpy() for x in outputs]).flatten()
-        all_targets = np.concatenate([x["targets"].cpu().numpy() for x in outputs]).flatten()
-        all_preds = 1 - all_preds
-        all_targets = 1 - all_targets
-        precision = precision_score(all_targets, all_preds)
-        recall = recall_score(all_targets, all_preds)
-        f1 = f1_score(all_targets, all_preds)
+        f1 = self.f1score.compute()
+        recall = self.recall.compute()
+        precision = self.precision.compute()
+
         self.log("test_precision", precision, sync_dist=True)
         self.log("test_recall", recall, sync_dist=True)
         self.log("test_f1score", f1, sync_dist=True)
-        print(f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
 
-        self.test_step_outputs.clear()
+        # Reset metrics after computation
+        self.f1score.reset()
+        self.recall.reset()
+        self.precision.reset()
 
 
 class ResFCLayer(nn.Module):
@@ -161,7 +175,7 @@ class FPathPredictor(nn.Module):
             nn.Linear(128, out_channel, bias=True)
         )
         
-    def forward(self, vtf, img):
+    def forward(self, vtf, img, infodraw):
         x = vtf.permute((0, 2, 3, 1)) # [B x C x H x W] -> [B x H x W x C]
         out = self.layer1(x)
         out = self.final_layer(out)
@@ -219,7 +233,7 @@ class NaiveTransposedCNNBlock(nn.Module):
     
 
 class UNetFPathPredictor(nn.Module):
-    def __init__(self, in_channels=24, out_channels=1, init_features=64, num_layers=5, dropout_p=0.0):
+    def __init__(self, in_channels=21, out_channels=1, init_features=64, num_layers=5, dropout_p=0.0):
         super(UNetFPathPredictor, self).__init__()
 
         self.encoders = nn.ModuleList()
@@ -259,8 +273,9 @@ class UNetFPathPredictor(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.final_conv = nn.Conv2d(features // 2, out_channels, kernel_size=1)
 
-    def forward(self, vtf, img):
-        x = torch.cat([vtf, img], dim=1)
+    def forward(self, vtf, img, infodraw):
+        # x = torch.cat([vtf, img], dim=1)
+        x = vtf
         enc_features = []
 
         # Encoder path
