@@ -28,7 +28,6 @@ def main():
     parser.add_argument('--test_yaml', type=str, required=True, help='Path to the test dataset YAML file')
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate for the optimizer')
-    # parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save checkpoints')
     parser.add_argument('--num_workers', type=int, default=16, help="num workers for dataloader")
     parser.add_argument('--model_name', type=str, default="FPathPredictor", choices=["FPathPredictor", "UNetFPathPredictor"])
     parser.add_argument('--devices', type=str, default="0,1", help="GPU ids to use for training")
