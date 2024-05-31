@@ -38,13 +38,14 @@ class SketchMaskLoss(nn.Module):
         return loss_W + loss_B
     
 class SketchNoiseMaskLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, threshold_W):
         super().__init__()
+        
+        self.threshold_W = threshold_W
         self.sketch_loss = SketchMaskLoss()
     
     def forward(self, pred, target, infodraw):
-        mask = infodraw != 1 # infodraw에서 1이 아닌 부분 
-        
+        mask = infodraw < self.threshold_W # infodraw에서 1이 아닌 부분 
         return self.sketch_loss(pred, target, mask=mask)
         
         
