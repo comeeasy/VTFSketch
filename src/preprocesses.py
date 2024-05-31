@@ -56,6 +56,23 @@ class ImagePreprocessor:
 
     @staticmethod
     def __preprocess(img):
-        img = ImagePreprocessor.img_transforms(img) # [C x H x W]
+        img = ImagePreprocessor.img_transforms(img=img) # [C x H x W]
         return img
+
+class InfodrawPreprocessor:
+    
+    infodraw_transforms = transforms.Compose([
+        transforms.ToTensor(),    
+    ])
+    
+    @staticmethod
+    def get(infodraw_path):
+        infodraw = Image.open(infodraw_path).convert("L")
+        infodraw = InfodrawPreprocessor.__preprocess(infodraw=infodraw)
+        return infodraw
+    
+    @staticmethod
+    def __preprocess(infodraw):
+        infodraw = InfodrawPreprocessor.infodraw_transforms(infodraw)
+        return infodraw
     

@@ -6,6 +6,7 @@ from src.preprocesses import (
     TargetPreprocessor, 
     VTFPreprocessor, 
     ImagePreprocessor,
+    InfodrawPreprocessor,
 )
 
 
@@ -24,50 +25,53 @@ class FPathDataset(Dataset):
         self.data = load_data_dict_from_yaml(config_path)
 
         _len = len(self.data)
-        self.vtfs    = [VTFPreprocessor.get(self.data[idx]['vtf']) for idx in range(_len)]
-        self.targets = [TargetPreprocessor.get(self.data[idx]['target']) for idx in range(_len)]
-        self.imgs    = [ImagePreprocessor.get(self.data[idx]['img']) for idx in range(_len)]
+        self.vtfs       = [VTFPreprocessor.get(self.data[idx]['vtf']) for idx in range(_len)]
+        self.targets    = [TargetPreprocessor.get(self.data[idx]['target']) for idx in range(_len)]
+        self.imgs       = [ImagePreprocessor.get(self.data[idx]['img']) for idx in range(_len)]
+        self.infodraws  = [InfodrawPreprocessor.get(self.data[idx]['infodraw'] for idx in range(_len))]
     
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
-        return self.vtfs[index], self.imgs[index], self.targets[index]
+        return self.vtfs[index], self.imgs[index], self.infodraws[index], self.targets[index]
 
-class UNetFPathDataset(Dataset):
+# class UNetFPathDataset(Dataset):
+#     def __init__(self, config_path) -> None:
+#         super().__init__()
+#         self.data = load_data_dict_from_yaml(config_path)
+
+#         _len = len(self.data)
+#         self.vtfs    = [VTFPreprocessor.get(self.data[idx]['vtf']) for idx in range(_len)]
+#         self.targets = [TargetPreprocessor.get(self.data[idx]['target']) for idx in range(_len)]
+#         self.imgs    = [ImagePreprocessor.get(self.data[idx]['img']) for idx in range(_len)]
+    
+#     def __len__(self):
+#         return len(self.data)
+
+#     def __getitem__(self, index):
+#         return self.vtfs[index], self.imgs[index], self.targets[index]
+    
+class FPathLazyDataset(Dataset):
     def __init__(self, config_path) -> None:
         super().__init__()
         self.data = load_data_dict_from_yaml(config_path)
-
-        _len = len(self.data)
-        self.vtfs    = [VTFPreprocessor.get(self.data[idx]['vtf']) for idx in range(_len)]
-        self.targets = [TargetPreprocessor.get(self.data[idx]['target']) for idx in range(_len)]
-        self.imgs    = [ImagePreprocessor.get(self.data[idx]['img']) for idx in range(_len)]
     
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
-        return self.vtfs[index], self.imgs[index], self.targets[index]
-    
-class UNetFPathLazyDataset(Dataset):
-    def __init__(self, config_path) -> None:
-        super().__init__()
-        self.data = load_data_dict_from_yaml(config_path)
-    
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        vtf_path = self.data[index]['vtf']
-        img_path = self.data[index]['img']
-        target_path = self.data[index]['target']
+        vtf_path        = self.data[index]['vtf']
+        img_path        = self.data[index]['img']
+        target_path     = self.data[index]['target']
+        infodraw_path   = self.data[index]['infodraw']
         
-        vtf = VTFPreprocessor.get(vtf_path=vtf_path)
-        img = ImagePreprocessor.get(img_path=img_path)
-        target = TargetPreprocessor.get(target_path=target_path)
+        vtf         = VTFPreprocessor.get(vtf_path=vtf_path)
+        img         = ImagePreprocessor.get(img_path=img_path)
+        target      = TargetPreprocessor.get(target_path=target_path)
+        infodraw    = InfodrawPreprocessor.get(infodraw_path=infodraw_path)
         
-        return vtf, img, target
+        return vtf, img, infodraw, target
 
 
 class FPathDataModule(L.LightningDataModule):
@@ -77,13 +81,13 @@ class FPathDataModule(L.LightningDataModule):
 
     def setup(self, stage=None):
         if self.args.use_lazy_loader:
-            self.train_dataset = UNetFPathLazyDataset(self.args.train_yaml)
-            self.val_dataset = UNetFPathLazyDataset(self.args.val_yaml)
-            self.test_dataset = UNetFPathLazyDataset(self.args.test_yaml)
+            self.train_dataset = FPathLazyDataset(self.args.train_yaml)
+            self.val_dataset = FPathLazyDataset(self.args.val_yaml)
+            self.test_dataset = FPathLazyDataset(self.args.test_yaml)
         else:
-            self.train_dataset = UNetFPathDataset(self.args.train_yaml)
-            self.val_dataset = UNetFPathDataset(self.args.val_yaml)
-            self.test_dataset = UNetFPathDataset(self.args.test_yaml)
+            self.train_dataset = FPathDataset(self.args.train_yaml)
+            self.val_dataset = FPathDataset(self.args.val_yaml)
+            self.test_dataset = FPathDataset(self.args.test_yaml)
 
     def train_dataloader(self):
         return DataLoader(

@@ -45,38 +45,38 @@ class VTFPredictor(L.LightningModule):
     def configure_optimizers(self):
         return optim.AdamW(list(self.model.parameters()) + list(self.objective.parameters()), lr=self.learning_rate)
 
-    def calculate_loss(self, pred_target, target, vtf):
+    def calculate_loss(self, pred_target, target, infodraw):
         if self.loss_name == "SketchMaskLoss":
             loss = self.objective(pred_target, target, None)
         elif self.loss_name == "SketchNoiseMaskLoss":
-            loss = self.objective(pred_target, target, vtf[:, 10, :, :]) # 10번째 channel에 infodraw가 저장
+            loss = self.objective(pred_target, target, infodraw) # 10번째 channel에 infodraw가 저장
         else:
             raise RuntimeError("Spcify correct loss. in [\"SketchMaskLoss\", \"SketchNoiseMaskLoss\"]")
         return loss
 
     def training_step(self, batch, batch_idx):
-        vtf, img, target = batch
+        vtf, img, infodraw, target = batch
         pred_target = self(vtf, img)
         
-        loss = self.calculate_loss(pred_target=pred_target, target=target, vtf=vtf)
+        loss = self.calculate_loss(pred_target=pred_target, target=target, infodraw=infodraw)
         
         self.log("train_loss", loss, sync_dist=True)
-        print(f"train_loss: {loss}")
+        # print(f"train_loss: {loss}")
         return loss
 
     def validation_step(self, batch, batch_idx):
-        vtf, img, target = batch
+        vtf, img, infodraw, target = batch
         pred_target = self.model(vtf, img)
-        loss = self.calculate_loss(pred_target=pred_target, target=target, vtf=vtf)
+        loss = self.calculate_loss(pred_target=pred_target, target=target, infodraw=infodraw)
         self.log("val_loss", loss, sync_dist=True)
-        print(f"val_loss: {loss}")
+        # print(f"val_loss: {loss}")
         # pred_target = self.inference(vtf, img)
         images = wandb.Image((pred_target > 0.5).float(), caption="val results")
         self.logger.experiment.log({"val_results": images})
         self.validation_step_outputs.append({"preds": pred_target, "targets": target})
 
     def test_step(self, batch, batch_idx):
-        vtf, img, target = batch
+        vtf, img, infodraw, target = batch
         # pred_target = self.inference(vtf, img)
         pred_target = self(vtf, img)
         self.test_step_outputs.append({"preds": pred_target, "targets": target})
@@ -162,11 +162,11 @@ class FPathPredictor(nn.Module):
         )
         
     def forward(self, vtf, img):
-        x = vtf.permute((0, 2, 3, 1))
+        x = vtf.permute((0, 2, 3, 1)) # [B x C x H x W] -> [B x H x W x C]
         out = self.layer1(x)
         out = self.final_layer(out)
         
-        out = out.permute((0, 3, 1, 2))
+        out = out.permute((0, 3, 1, 2)) # [B x H x W x C] -> [B x C x H x W]
         return torch.sigmoid(out)
 
 class NaiveCNNBlock(nn.Module):
