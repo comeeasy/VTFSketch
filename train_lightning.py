@@ -32,7 +32,7 @@ def main():
     parser.add_argument('--model_name', type=str, default="FPathPredictor", choices=["FPathPredictor", "UNetFPathPredictor"])
     parser.add_argument('--devices', type=str, default="0,1", help="GPU ids to use for training")
     parser.add_argument('--loss_name', type=str, default="SketchMaskLoss", choices=["SketchMaskLoss", "SketchNoiseMaskLoss"])
-    parser.add_argument('--use_lazy_loader', action='store_true', help="Uses lazy dataloader")
+    parser.add_argument('--no_use_lazy_loader', action='store_true', help="Uses lazy dataloader")
 
     args = parser.parse_args()
     args.devices = [int(device) for device in args.devices.split(",")]

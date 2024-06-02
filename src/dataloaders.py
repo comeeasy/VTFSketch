@@ -80,14 +80,14 @@ class FPathDataModule(L.LightningDataModule):
         self.args = args
 
     def setup(self, stage=None):
-        if self.args.use_lazy_loader:
-            self.train_dataset = FPathLazyDataset(self.args.train_yaml)
-            self.val_dataset = FPathLazyDataset(self.args.val_yaml)
-            self.test_dataset = FPathLazyDataset(self.args.test_yaml)
-        else:
+        if self.args.no_use_lazy_loader:
             self.train_dataset = FPathDataset(self.args.train_yaml)
             self.val_dataset = FPathDataset(self.args.val_yaml)
             self.test_dataset = FPathDataset(self.args.test_yaml)
+        else:
+            self.train_dataset = FPathLazyDataset(self.args.train_yaml)
+            self.val_dataset = FPathLazyDataset(self.args.val_yaml)
+            self.test_dataset = FPathLazyDataset(self.args.test_yaml)
 
     def train_dataloader(self):
         return DataLoader(
