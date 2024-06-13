@@ -29,10 +29,11 @@ def main():
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate for the optimizer')
     parser.add_argument('--num_workers', type=int, default=16, help="num workers for dataloader")
-    parser.add_argument('--model_name', type=str, default="FPathPredictor", choices=["FPathPredictor", "UNetFPathPredictor"])
+    parser.add_argument('--model_name', type=str, default="FPathPredictor", choices=["FPathPredictor", "MinFPathPredictor", "UNetFPathPredictor", "UNetFPathPredictor_VTFOnly"])
     parser.add_argument('--devices', type=str, default="0,1", help="GPU ids to use for training")
-    parser.add_argument('--loss_name', type=str, default="SketchMaskLoss", choices=["SketchMaskLoss", "SketchNoiseMaskLoss"])
+    parser.add_argument('--loss_name', type=str, default="SketchMaskLoss", choices=["SketchMaskLoss", "SketchNoiseMaskLoss", "MaskedBCELoss"])
     parser.add_argument('--no_use_lazy_loader', action='store_true', help="Uses lazy dataloader")
+    parser.add_argument('--inference_mode', type=str, default="Selective", choices=["Selective", "Whole"])
 
     args = parser.parse_args()
     args.devices = [int(device) for device in args.devices.split(",")]
@@ -48,6 +49,7 @@ def main():
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         loss_name=args.loss_name,
+        inference_mode=args.inference_mode
     )
 
     checkpoint_callback = ModelCheckpoint(

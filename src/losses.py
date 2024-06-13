@@ -47,5 +47,16 @@ class SketchNoiseMaskLoss(nn.Module):
     def forward(self, pred, target, infodraw):
         mask = infodraw < self.threshold_W # infodraw에서 1이 아닌 부분 
         return self.sketch_loss(pred, target, mask=mask)
+
+class MaskedBCELoss(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def forward(self, pred, target, mask=None):
+        loss_per_pixel = -(target * torch.log(pred+1e-8) + (1-target) * torch.log(1-pred+1e-8))
+        masked_loss_per_pixel = mask * loss_per_pixel
+        loss = torch.sum(masked_loss_per_pixel) / torch.sum(mask)
+
+        return loss
         
         

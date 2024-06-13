@@ -10,20 +10,27 @@ import wandb
 import lightning as L
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-from src.losses import SketchMaskLoss, SketchNoiseMaskLoss
+from src.losses import SketchMaskLoss, SketchNoiseMaskLoss, MaskedBCELoss
+from src.unet.unet_models import UNet
+
+from tqdm import tqdm
+
 
 
 
 # Training, Validation, and Test Functions
 class VTFPredictor(L.LightningModule):
-    def __init__(self, model_name, learning_rate, batch_size, num_workers, loss_name):
+    def __init__(self, model_name, learning_rate=1e-4, batch_size=1, num_workers=-1, 
+                 loss_name="SketchMaskLoss", inference_mode="Selective"):
         super(VTFPredictor, self).__init__()
-        self.save_hyperparameters()
         if model_name == "FPathPredictor":
             self.model = FPathPredictor()
         elif model_name == "UNetFPathPredictor":
-            self.model = UNetFPathPredictor()
-        
+            self.model = UNet(in_channels=24, out_channels=1) # [vtf + img]  = 24 x H x W
+        elif model_name == "UNetFPathPredictor_VTFOnly":
+            self.model = UNet(in_channels=21, out_channels=1) # vtf  = 21 x H x W
+        elif model_name == "MinFPathPredictor":
+            self.model = MinFPathPredictor()
         
         self.loss_name = loss_name
         self.threshold_W = 0.99
@@ -31,7 +38,11 @@ class VTFPredictor(L.LightningModule):
             self.objective = SketchMaskLoss()
         elif loss_name == "SketchNoiseMaskLoss":
             self.objective = SketchNoiseMaskLoss(threshold_W=self.threshold_W)
-        
+        elif loss_name == "MaskedBCELoss":
+            self.objective = MaskedBCELoss()
+
+        self.inference_mode = inference_mode
+
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -43,27 +54,37 @@ class VTFPredictor(L.LightningModule):
         self.recall     = torchmetrics.Recall(task='binary')
         self.precision  = torchmetrics.Precision(task='binary')
 
+        self.save_hyperparameters()
+
     def forward(self, vtf, img, infodraw):
         return self.model(vtf, img, infodraw)
 
     def inference(self, vtf, img, infodraw):
         pred = self(vtf=vtf, img=img, infodraw=infodraw)
         
-        mask = infodraw < self.threshold_W
-        infodraw[torch.where(mask)] = pred[torch.where(mask)]
+        if self.inference_mode == "Selective":
+            mask = (infodraw < self.threshold_W).float()
+            masked_pred = (mask * pred) + (1-mask * infodraw)
+            result = torch.tensor(masked_pred > 0.5).float().detach()
+        elif self.inference_mode == "Whole":
+            masked_pred = pred.clone()
+            result = torch.tensor(masked_pred > 0.5).float().detach()  
+        else:
+            raise RuntimeError(f"inference mode is {self.inference_mode}, chech usage on train_lightning.py")
         
-        result = torch.tensor(infodraw.clone().detach() > 0.5, dtype=torch.float32)
-        
-        return pred, result
+        return pred, masked_pred, result
 
     def configure_optimizers(self):
         return optim.Adam(self.model.parameters(), lr=self.learning_rate)
-
+        
     def calculate_loss(self, pred_target, target, infodraw):
         if self.loss_name == "SketchMaskLoss":
             loss = self.objective(pred_target, target, None)
         elif self.loss_name == "SketchNoiseMaskLoss":
             loss = self.objective(pred_target, target, infodraw)
+        elif self.loss_name == "MaskedBCELoss":
+            mask = infodraw < self.threshold_W
+            loss = self.objective(pred=pred_target, target=target, mask=mask)
         else:
             raise RuntimeError("Spcify correct loss. in [\"SketchMaskLoss\", \"SketchNoiseMaskLoss\"]")
         return loss
@@ -75,17 +96,18 @@ class VTFPredictor(L.LightningModule):
         loss = self.calculate_loss(pred_target=pred_target, target=target, infodraw=infodraw)
         
         self.log("train_loss", loss, sync_dist=True)
-        # print(f"train_loss: {loss}")
         return loss
 
     def validation_step(self, batch, batch_idx):
         vtf, img, infodraw, target = batch
-        pred_target, result = self.inference(vtf=vtf, img=img, infodraw=infodraw)
+        pred_target, masked_pred, result = self.inference(vtf=vtf, img=img, infodraw=infodraw)
         loss = self.calculate_loss(pred_target=pred_target, target=target, infodraw=infodraw)
         self.log("val_loss", loss, sync_dist=True)
         
-        images = wandb.Image(result, caption="val results")
-        self.logger.experiment.log({"val_results": images})
+        results = wandb.Image(result, caption="val results")
+        self.logger.experiment.log({"val_results": results})
+        masked_preds = wandb.Image(masked_pred)
+        self.logger.experiment.log({"val_masked_pred": masked_preds})
         
         # 하얀 배경이 아닌 스케치를 정답으로 삼음
         self.f1score.update(1-result, 1-target) 
@@ -94,7 +116,7 @@ class VTFPredictor(L.LightningModule):
 
     def test_step(self, batch, batch_idx):
         vtf, img, infodraw, target = batch
-        _, result = self.inference(vtf=vtf, img=img, infodraw=infodraw)
+        _, _, result = self.inference(vtf=vtf, img=img, infodraw=infodraw)
 
         self.f1score.update(1-result, 1-target) 
         self.recall.update(1-result, 1-target)
@@ -131,12 +153,10 @@ class VTFPredictor(L.LightningModule):
 
 
 class ResFCLayer(nn.Module):
-    def __init__(self, in_channel, out_channel, bias=False, dropout_p=0.0) -> None:
+    def __init__(self, in_channel, out_channel, bias=False, 
+                        dropout_p=0.0) -> None:
         super().__init__()
-        
         self.is_res_con = in_channel == out_channel
-        self.hidden_channel = in_channel // 4 if in_channel > 32 else in_channel
-        
         self.layer = nn.Sequential(
             nn.Linear(in_channel, out_channel, bias=bias),
             nn.LayerNorm(out_channel),
@@ -162,19 +182,15 @@ class ResFCLayer(nn.Module):
 class FPathPredictor(nn.Module):
     def __init__(self, in_channel=21, out_channel=1):
         super().__init__()
-        
         self.in_channel = in_channel
         self.out_channel = out_channel
-        
         self.layer1 = nn.Sequential(
             ResFCLayer(in_channel, 128, bias=True),
             ResFCLayer(128, 128, bias=False),
         )
-        
         self.final_layer = nn.Sequential(
             nn.Linear(128, out_channel, bias=True)
         )
-        
     def forward(self, vtf, img, infodraw):
         x = vtf.permute((0, 2, 3, 1)) # [B x C x H x W] -> [B x H x W x C]
         out = self.layer1(x)
@@ -182,6 +198,37 @@ class FPathPredictor(nn.Module):
         
         out = out.permute((0, 3, 1, 2)) # [B x H x W x C] -> [B x C x H x W]
         return torch.sigmoid(out)
+    
+class MinFPathPredictor(nn.Module):
+    def __init__(self, in_channel=21, out_channel=1):
+        super().__init__()
+        self.in_channel = in_channel
+        self.out_channel = out_channel
+        self.layer1 = nn.Sequential(
+            ResFCLayer(in_channel, 128, bias=True),
+            ResFCLayer(128, 128, bias=False),
+        )
+        self.final_layer = nn.Sequential(
+            nn.Linear(128, out_channel, bias=True)
+        )
+        
+    def forward(self, vtf, img, infodraw):
+        result = infodraw.clone()
+        vtf_list = []
+        B, _, H, W = infodraw.shape
+        for b in range(B):
+            for h in range(H):
+                for w in range(W):
+                    if infodraw[b, :, h, w].item() < 0.99:
+                        vtf_list.append((vtf[b, :, h, w], (h, w)))  
+
+            for vtf_vec, (h, w) in vtf_list:
+                out = self.layer1(vtf_vec.unsqueeze(0))
+                out = self.final_layer(out)
+                result[b, 0, h, w] = torch.sigmoid(out)
+        
+        return result
+        
 
 class NaiveCNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dropout_p=0.0):
@@ -281,6 +328,7 @@ class UNetFPathPredictor(nn.Module):
         # Encoder path
         for encoder in self.encoders:
             x = encoder(x)
+            print(f"x: {x.shape}")
             enc_features.append(x)
             x = self.pool(x)
 
@@ -291,6 +339,7 @@ class UNetFPathPredictor(nn.Module):
         # Decoder path
         for idx, (up_conv, decoder) in enumerate(zip(self.up_convs, self.decoders)):
             bottleneck = up_conv(bottleneck)
+            print(f"bottleneck: {bottleneck.shape}")
             bottleneck = torch.cat((bottleneck, enc_features[idx]), dim=1)
             bottleneck = decoder(bottleneck)
 
