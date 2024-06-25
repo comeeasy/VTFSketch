@@ -38,7 +38,7 @@ class VTFPreprocessor:
         # 픽셀중에 0.1% 정도 1 값을 넘는 값들이 있어 normalize 시 회색 이미지로 그려지는
         # 문제가 있어서 이를 해결
         # vtf[np.where(vtf > 1.0)] = 1
-        vtf = vtf.transpose((2, 1, 0)) # [W x H x C] -> [C x H x W] 
+        vtf = vtf.transpose((2, 1, 0)) # [W x H x C] -> [C x H x W]
         return np.clip(vtf, 0.0, 1.0)
     
 class ImagePreprocessor:

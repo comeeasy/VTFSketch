@@ -36,22 +36,6 @@ class FPathDataset(Dataset):
     def __getitem__(self, index):
         return self.vtfs[index], self.imgs[index], self.infodraws[index], self.targets[index]
 
-# class UNetFPathDataset(Dataset):
-#     def __init__(self, config_path) -> None:
-#         super().__init__()
-#         self.data = load_data_dict_from_yaml(config_path)
-
-#         _len = len(self.data)
-#         self.vtfs    = [VTFPreprocessor.get(self.data[idx]['vtf']) for idx in range(_len)]
-#         self.targets = [TargetPreprocessor.get(self.data[idx]['target']) for idx in range(_len)]
-#         self.imgs    = [ImagePreprocessor.get(self.data[idx]['img']) for idx in range(_len)]
-    
-#     def __len__(self):
-#         return len(self.data)
-
-#     def __getitem__(self, index):
-#         return self.vtfs[index], self.imgs[index], self.targets[index]
-    
 class FPathLazyDataset(Dataset):
     def __init__(self, config_path) -> None:
         super().__init__()

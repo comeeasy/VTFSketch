@@ -204,13 +204,7 @@ class MinFPathPredictor(nn.Module):
         super().__init__()
         self.in_channel = in_channel
         self.out_channel = out_channel
-        self.layer1 = nn.Sequential(
-            ResFCLayer(in_channel, 128, bias=True),
-            ResFCLayer(128, 128, bias=False),
-        )
-        self.final_layer = nn.Sequential(
-            nn.Linear(128, out_channel, bias=True)
-        )
+        self.layer1 = nn.Linear(in_features=in_channel, out_features=out_channel, bias=True)
         
     def forward(self, vtf, img, infodraw):
         result = infodraw.clone()
@@ -224,7 +218,6 @@ class MinFPathPredictor(nn.Module):
 
             for vtf_vec, (h, w) in vtf_list:
                 out = self.layer1(vtf_vec.unsqueeze(0))
-                out = self.final_layer(out)
                 result[b, 0, h, w] = torch.sigmoid(out)
         
         return result
