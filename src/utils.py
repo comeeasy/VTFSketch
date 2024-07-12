@@ -1,6 +1,7 @@
 import os
-
 import torch
+
+from sklearn.metrics import accuracy_score, f1_score, recall_score, confusion_matrix
 
 
 
@@ -57,3 +58,31 @@ def inference(model, vtf, img):
         pred_target = (pred_target > 0.5).float()
 
     return pred_target
+
+def calculate_noise_metric(preds, targets):
+    ####### sketch metric ###### 
+    # sketch: 1, Background: 0 #
+    ############################
+    
+    # 확률 값을 0과 1로 분류 (0.5 초과는 1, 나머지는 0)
+    preds = preds > 0.5 
+    
+    # sketch 는 실제 이미지에서 0, BG는 1 이므로 이 둘을 서로 바꿔줘야함.
+    sm_preds   = 1 - preds 
+    sm_targets = 1 - targets
+    
+    accuracy = accuracy_score(y_pred=sm_preds, y_true=sm_targets)
+    f1score  = f1_score(y_pred=sm_preds, y_true=sm_targets)
+    recall   = recall_score(y_pred=sm_preds, y_true=sm_targets)
+    conf_mat = confusion_matrix(y_pred=sm_preds, y_true=sm_targets)
+    
+    return {
+        'accuracy': accuracy,
+        'f1score': f1score,
+        'recall': recall,
+        'confusion_matrix': conf_mat,
+    }
+    
+    
+    
+    

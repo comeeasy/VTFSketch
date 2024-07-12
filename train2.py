@@ -1,5 +1,6 @@
 import numpy as np
 
+import wandb
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -10,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from src.models import ResFCLayer
+from src.utils import calculate_noise_metric
 
 
 
@@ -52,7 +54,7 @@ class ResCNN1DLayer(nn.Module):
         super().__init__()
         self.is_res_con = in_channel == out_channel
         self.layer = nn.Sequential(
-            nn.Conv1d(in_channel, out_channel, kernel_size=3, padding=1, bias=bias),
+            nn.Conv1d(in_channel, out_channel, kernel_size=5, padding=2, bias=bias),
             nn.BatchNorm1d(out_channel),
             nn.ReLU(inplace=True),
             nn.Dropout(p=dropout_p),
@@ -97,54 +99,71 @@ class CNNModel(nn.Module):
 
 
 if __name__ == "__main__":
+    wandb.login(relogin=True)
+    wandb.init(project="VTFSketch")
+    
     dset = FPathDataset(data_path="dataset/train_small.npz")
     val_dset = FPathDataset(data_path="dataset/val.npz")
-    dloader = DataLoader(dset, batch_size=40960, num_workers=24, drop_last=True)
-    val_dloader = DataLoader(val_dset, batch_size=40960, num_workers=24)
+    dloader = DataLoader(dset, batch_size=4096, num_workers=24, drop_last=True)
+    val_dloader = DataLoader(val_dset, batch_size=4096, num_workers=24)
 
-    model = FCModel()
-    # model = CNNModel()
-    optimizer = optim.Adam(model.parameters(), lr=5e-4)
+    # model = FCModel()
+    model = CNNModel()
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
     objective = nn.BCELoss()
     
-    model = model.to("cuda")
-    objective = objective.to('cuda')
+    device = "cuda:1"
+    
+    model = model.to(device)
+    objective = objective.to(device)
 
-    for epoch in range(10):
+    for epoch in range(1000):
         model = model.train()
-        sum_loss = 0
+        train_sum_loss = 0
         for fpath, target in tqdm(dloader):
-            fpath, target = fpath.to('cuda'), target.to('cuda')
+            fpath, target = fpath.to(device), target.to(device)
             y_hat = model(fpath)
             
             loss = objective(y_hat.squeeze(1), target)
-            sum_loss += loss.item()
+            train_sum_loss += loss.item()
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
         
         model = model.eval()
-        sTP, sFP, sTN, sFN = 0, 0, 0, 0
         max_accuracy = 0
+        preds_list, targets_list = [], []
+        val_sum_loss = 0
         with torch.no_grad():
             for fpath, target in tqdm(val_dloader):
-                fpath, target = fpath.to('cuda'), target.to('cuda')
+                fpath, target = fpath.to(device), target.to(device)
                 y_hat = model(fpath)
 
-                torch.sum((y_hat.squeeze() > 0.5) == target)
+                loss = objective(y_hat.squeeze(1), target)
+                val_sum_loss += loss.item()
 
-                sTP += torch.sum(((y_hat.squeeze() > 0.5) == target) * (target == 1))
-                sFP += torch.sum(((y_hat.squeeze() > 0.5) == target) * (target == 0))
-                sTN += torch.sum(((y_hat.squeeze() < 0.5) == target) * (target == 0))
-                sFN += torch.sum(((y_hat.squeeze() < 0.5) == target) * (target == 1))
+                targets_list.append(target.detach().cpu().numpy())
+                preds_list.append(y_hat.detach().cpu().numpy())
+
+        preds = np.concatenate(preds_list).flatten()
+        targets = np.concatenate(targets_list).flatten()
+        metric = calculate_noise_metric(preds=preds, targets=targets)
+
+        if metric['accuracy'] > max_accuracy:
+            max_accuracy = metric['accuracy']
+            torch.save(model, f"weights/best_CNNModel_acc{max_accuracy*100:2.2f}.pth")
         
-        accuracy = (sTP + sTN) / (sTP + sFP + sTN + sFN)
-        if accuracy > max_accuracy:
-            max_accuracy = accuracy
-            torch.save(model, f"weights/best_FCModel_acc{accuracy*100:2.2f}.pth")
-            
-        print(f"epoch: {epoch} || val accuracy: {accuracy}, step_loss: {sum_loss / len(dloader)}")
-        print(f"\tTP: {sTP}, FN: {sFN}")
-        print(f"\tFP: {sFP}, TN: {sTN}")
+        print(f"epoch: {epoch} || val accuracy: {metric['accuracy']}, val f1score: {metric['f1score']}, val recall: {metric['recall']}  val_loss: {val_sum_loss / len(val_dloader)}")
+        # Log metrics
+        wandb.log({
+            "epoch": epoch,
+            "train_loss": train_sum_loss / len(dloader),
+            "val_loss": val_sum_loss / len(val_dloader),
+            "val_accuracy": metric['accuracy'],
+            "val_f1score": metric['f1score'],
+            "val_recall": metric['recall']
+        })
+    
+    wandb.finish()
     
