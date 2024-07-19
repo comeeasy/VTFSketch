@@ -162,7 +162,11 @@ if __name__ == "__main__":
             "val_loss": val_sum_loss / len(val_dloader),
             "val_accuracy": metric['accuracy'],
             "val_f1score": metric['f1score'],
-            "val_recall": metric['recall']
+            "val_recall": metric['recall'],
+            "val_precision": metric['precision'],
+            "val_sketch_acc": metric["sketch_class_acc"],
+            "val_non_sketch_acc": metric["non_sketch_class_acc"],
+            "val_sketch_non_sketch_avg_acc": metric["sketch_non_sketch_avrg_acc"],
         })
     
     wandb.finish()
