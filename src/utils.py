@@ -98,12 +98,62 @@ def calculate_noise_metric(preds, targets):
         'sketch_non_sketch_avrg_acc': sketch_non_sketch_avrg_acc,
     }
     
-
-if __name__ == "__main__":
-    a = np.array([False, True, True])
-    b = np.array([0, 1, 0])
+def point_interpolate_from_gray_image(x: float, y: float, img):
+    # img(gray scale) -> [H, W]
     
-    print(a.shape, b.shape)
+    A_pos = int(x), int(y)
+    B_pos = int(x)+1, int(y)
+    C_pos = int(x), int(y)+1
+    D_pos = int(x)+1, int(y)+1
+    A, B, C, D = img[A_pos[1], A_pos[0]], img[B_pos[1], B_pos[0]], img[C_pos[1], C_pos[0]], img[D_pos[1], D_pos[0]]
+    alpha = x - A_pos[0]
+    beta = x - C_pos[0]
+    gamma = y - A_pos[1]
+    AB = alpha * B + (1-alpha) * A
+    CD = beta * D + (1-beta) * C
+    P = gamma * CD + (1-gamma) * AB
+    
+    return P
+
+def cosine_similarity(x, y):
+    x, y = np.float64(x), np.float64(y)
+    return np.dot(x, y) / max((np.linalg.norm(x) * np.linalg.norm(y)), np.finfo(float).eps)    
+
+def get_curvature(flowpath):
+    curvature = []
+    for i in range(1, 20):
+        curvature_i = flowpath[i+1] - flowpath[i-1]
+        curvature.append(curvature_i)
+    return np.array(curvature, dtype=np.float64)
+
+def calc_sim_geom(curvature0, curvature1):
+    # uses cosine similarity
+    sim_geoms = []
+    for cvt0, cvt1 in zip(curvature0, curvature1):
+        sim_geom = cosine_similarity(cvt0, cvt1)
+        sim_geoms.append(sim_geom)
+    return np.mean(sim_geoms)
+
+def calc_sim_color(vtf_infodraw, vtf_target):
+    # use cosine similarity
+    # sim_color = cosine_similarity(vtf_infodraw, vtf_target)
+    
+    sim_color = np.mean(1-vtf_target)
+    return sim_color
+
+def calc_sim_color_ssd(vtf1, vtf2):
+    return np.mean((vtf1 - vtf2)*(vtf1 - vtf2))
+
+def calc_sim_color_sad(vtf1, vtf2):
+    return np.mean(np.abs(vtf1 - vtf2))
+
+def get_vtf_target(flowpath, target):
+    intensities = []
+    for x, y in flowpath:
+        intensity = point_interpolate_from_gray_image(x, y, target)
+        intensities.append(intensity)
+    return np.array(intensities)
+
     
     metric = calculate_noise_metric(preds=a, targets=b)
     print(metric)

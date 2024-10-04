@@ -198,7 +198,7 @@ class FPathPredictor(nn.Module):
         
         out = out.permute((0, 3, 1, 2)) # [B x H x W x C] -> [B x C x H x W]
         return torch.sigmoid(out)
-    
+
 class MinFPathPredictor(nn.Module):
     def __init__(self, in_channel=21, out_channel=1):
         super().__init__()
@@ -221,7 +221,7 @@ class MinFPathPredictor(nn.Module):
                 result[b, 0, h, w] = torch.sigmoid(out)
         
         return result
-        
+
 
 class NaiveCNNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dropout_p=0.0):
@@ -245,7 +245,7 @@ class NaiveCNNBlock(nn.Module):
     
     def forward(self, x):
         return self.layer(x)
-    
+
 class NaiveTransposedCNNBlock(nn.Module):
     # 2x2 up convolution
     
@@ -270,7 +270,6 @@ class NaiveTransposedCNNBlock(nn.Module):
         
     def forward(self, x):
         return self.layer(x)
-    
 
 class UNetFPathPredictor(nn.Module):
     def __init__(self, in_channels=21, out_channels=1, init_features=64, num_layers=5, dropout_p=0.0):
@@ -313,7 +312,7 @@ class UNetFPathPredictor(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.final_conv = nn.Conv2d(features // 2, out_channels, kernel_size=1)
 
-    def forward(self, vtf, img, infodraw):
+    def forward(self, vtf, img=None, infodraw=None):
         # x = torch.cat([vtf, img], dim=1)
         x = vtf
         enc_features = []
@@ -343,3 +342,25 @@ class UNetFPathPredictor(nn.Module):
             NaiveCNNBlock(in_channels=in_channels, out_channels=features, kernel_size=kernel_size, stride=stride, padding=padding, dropout_p=dropout_p),
             NaiveCNNBlock(in_channels=features, out_channels=features, kernel_size=kernel_size, stride=stride, padding=padding, dropout_p=dropout_p)
         )
+
+class FCNet(nn.Module):
+    def __init__(self, in_channel=21, out_channel=1):
+        super().__init__()
+        self.in_channel = in_channel
+        self.out_channel = out_channel
+        self.layer1 = nn.Sequential(
+            nn.Linear(self.in_channel, 128, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 128, bias=True),
+            nn.ReLU(inplace=True),
+        )
+        self.final_layer = nn.Sequential(
+            nn.Linear(128, out_channel, bias=True)
+        )
+    def forward(self, vtf):
+        x = vtf.permute((0, 2, 3, 1)) # [B x C x H x W] -> [B x H x W x C]
+        out = self.layer1(x)
+        out = self.final_layer(out)
+        
+        out = out.permute((0, 3, 1, 2)) # [B x H x W x C] -> [B x C x H x W]
+        return torch.sigmoid(out)
