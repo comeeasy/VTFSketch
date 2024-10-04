@@ -2,7 +2,13 @@ import os
 import torch
 import numpy as np
 
-from sklearn.metrics import accuracy_score, f1_score, recall_score, confusion_matrix
+from sklearn.metrics import (
+    accuracy_score, 
+    f1_score, 
+    recall_score, 
+    confusion_matrix, 
+    precision_score,
+)
 
 
 
@@ -76,12 +82,20 @@ def calculate_noise_metric(preds, targets):
     f1score  = f1_score(y_pred=sm_preds, y_true=sm_targets)
     recall   = recall_score(y_pred=sm_preds, y_true=sm_targets)
     conf_mat = confusion_matrix(y_pred=sm_preds, y_true=sm_targets)
+    prec     = precision_score(y_pred=sm_preds, y_true=sm_targets)
+    sketch_class_acc = np.sum((sm_targets == 1) * sm_preds) / np.sum(sm_targets == 1)
+    non_sketch_class_acc = np.sum((sm_targets == 0) * (1-sm_preds)) / np.sum(sm_targets == 0)
+    sketch_non_sketch_avrg_acc = (sketch_class_acc + non_sketch_class_acc) / 2
     
     return {
         'accuracy': accuracy,
         'f1score': f1score,
         'recall': recall,
         'confusion_matrix': conf_mat,
+        'precision': prec,
+        'sketch_class_acc': sketch_class_acc,
+        'non_sketch_class_acc': non_sketch_class_acc,
+        'sketch_non_sketch_avrg_acc': sketch_non_sketch_avrg_acc,
     }
     
 def point_interpolate_from_gray_image(x: float, y: float, img):
@@ -139,5 +153,8 @@ def get_vtf_target(flowpath, target):
         intensity = point_interpolate_from_gray_image(x, y, target)
         intensities.append(intensity)
     return np.array(intensities)
+
     
+    metric = calculate_noise_metric(preds=a, targets=b)
+    print(metric)
     
