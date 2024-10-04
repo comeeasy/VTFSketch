@@ -1,3 +1,4 @@
+import time
 from torch.utils.data import Dataset, DataLoader
 
 import lightning as L
@@ -10,12 +11,13 @@ from src.preprocesses import (
 )
 
 
-
 def load_data_dict_from_yaml(yaml_path):
     import yaml
+    
     # Load the YAML file
     with open(yaml_path, 'r') as file:
         data_dict = yaml.safe_load(file)
+    
     
     return data_dict
 
@@ -37,9 +39,11 @@ class FPathDataset(Dataset):
         return self.vtfs[index], self.imgs[index], self.infodraws[index], self.targets[index]
 
 class FPathLazyDataset(Dataset):
-    def __init__(self, config_path) -> None:
+    def __init__(self, config_path, mask_threshold, test=False) -> None:
         super().__init__()
         self.data = load_data_dict_from_yaml(config_path)
+        self.mask_threshold = mask_threshold
+        self.test = test
     
     def __len__(self):
         return len(self.data)
@@ -47,15 +51,21 @@ class FPathLazyDataset(Dataset):
     def __getitem__(self, index):
         vtf_path        = self.data[index]['vtf']
         img_path        = self.data[index]['img']
-        target_path     = self.data[index]['target']
+        if not self.test:
+            target_path     = self.data[index]['target']
         infodraw_path   = self.data[index]['infodraw']
         
         vtf         = VTFPreprocessor.get(vtf_path=vtf_path)
         img         = ImagePreprocessor.get(img_path=img_path)
-        target      = TargetPreprocessor.get(target_path=target_path)
+        if not self.test:
+            target      = TargetPreprocessor.get(target_path=target_path)
         infodraw    = InfodrawPreprocessor.get(infodraw_path=infodraw_path)
+        mask        = infodraw < self.mask_threshold
         
-        return vtf, img, infodraw, target
+        if not self.test:
+            return {"vtf": vtf, "img": img, "infodraw": infodraw, "target": target, "mask": mask}
+        else:
+            return {"vtf": vtf, "img": img, "infodraw": infodraw, "mask": mask}
 
 
 class FPathDataModule(L.LightningDataModule):

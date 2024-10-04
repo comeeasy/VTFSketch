@@ -76,3 +76,14 @@ class InfodrawPreprocessor:
         infodraw = InfodrawPreprocessor.infodraw_transforms(infodraw)
         return infodraw
     
+class FlowpathPreprocessor:
+    @staticmethod
+    def get(flowpath_path):
+        flowpath = np.load(flowpath_path)['data']
+        flowpath = FlowpathPreprocessor.__preprocess(flowpath=flowpath)
+        return flowpath
+    
+    @staticmethod
+    def __preprocess(flowpath):
+        flowpath = np.transpose(flowpath, (1, 0, 2, 3))
+        return flowpath
