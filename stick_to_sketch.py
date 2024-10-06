@@ -63,11 +63,16 @@ def get_enhanced_target(
     
     
     # 2. calculate distance map from target(GT)
-    MAX_Y, MAX_X= target.shape
-    jfa_instance = JFA(MAX_Y, MAX_X)
+    # MAX_Y, MAX_X= target.shape
+    # jfa_instance = JFA(MAX_Y, MAX_X)
     
-    jfa_instance.jump_flooding(target)
-    distmap = jfa_instance.draw_distmap()
+    # jfa_instance.jump_flooding(target)
+    # distmap = jfa_instance.draw_distmap()
+    
+    from voronoi_updated import JFAVoronoiDiagram
+    
+    _, distmap = JFAVoronoiDiagram(target)
+    
     distmap_inv_alpha = (1 - distmap)**DISTMAP_ALPHA
 
     # 3. Blend P & Distance map
