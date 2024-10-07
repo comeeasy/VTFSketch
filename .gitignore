@@ -4,3 +4,4 @@ results/
 *.png
 wandb/
 nohup.out
+weights/
