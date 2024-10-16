@@ -51,45 +51,48 @@ class TargetEnhancer:
         
         else:
             for data_path in tqdm(dataset.data):
-                # read vtf, infodraw, target, flowpath
-                vtf = VTFPreprocessor.get(data_path["vtf"])
-                infodraw = InfodrawPreprocessor.get(data_path["infodraw"])
-                target = TargetPreprocessor.get(data_path["target"])
-                flowpath = FlowpathPreprocessor.get(data_path["flowpath"])
-                
-                # calculate mask            
-                mask = infodraw < dataset.mask_threshold
+                try:
+                    # read vtf, infodraw, target, flowpath
+                    vtf = VTFPreprocessor.get(data_path["vtf"])
+                    infodraw = InfodrawPreprocessor.get(data_path["infodraw"])
+                    target = TargetPreprocessor.get(data_path["target"])
+                    flowpath = FlowpathPreprocessor.get(data_path["flowpath"])
+                    
+                    # calculate mask            
+                    mask = infodraw < dataset.mask_threshold
 
-                # enhance target using trained model
-                mask = mask.to(device)
-                vtf_tensor = torch.tensor(vtf).unsqueeze(0).to(device)
-                model = model.to(device)
-                enhanced_target = get_enhanced_target(
-                    predictor=model,
-                    vtf_tensor=vtf_tensor,
-                    infodraw=infodraw,
-                    target=target,
-                    flowpath=flowpath,
-                    mask=mask,
-                ) 
+                    # enhance target using trained model
+                    mask = mask.to(device)
+                    vtf_tensor = torch.tensor(vtf).unsqueeze(0).to(device)
+                    model = model.to(device)
+                    enhanced_target = get_enhanced_target(
+                        predictor=model,
+                        vtf_tensor=vtf_tensor,
+                        infodraw=infodraw,
+                        target=target,
+                        flowpath=flowpath,
+                        mask=mask,
+                    ) 
 
-                # set path to store enhanced target
-                next_data_path = data_path["target"].split("/")
-                next_data_path[-2]= f"targets_{iteration}"
-                next_data_base_path = "/".join(next_data_path[:-1])
-                next_data_file_path = next_data_path[-1]
+                    # set path to store enhanced target
+                    next_data_path = data_path["target"].split("/")
+                    next_data_path[-2]= f"targets_{iteration}"
+                    next_data_base_path = "/".join(next_data_path[:-1])
+                    next_data_file_path = next_data_path[-1]
 
-                # create target's directory (e.g. targets_1, targets_2, ... so on)
-                target_base_path = pathlib.Path(next_data_base_path)
-                if not target_base_path.exists():
-                    target_base_path.mkdir(parents=True, exist_ok=True)
-                enhanced_target_path = os.path.join(next_data_base_path, next_data_file_path)
-                
-                # save enhanced target
-                plt.imsave(enhanced_target_path, 1-enhanced_target, cmap="gray")
-                
-                # update path for target to enhenced one
-                data_path["target"] = enhanced_target_path
+                    # create target's directory (e.g. targets_1, targets_2, ... so on)
+                    target_base_path = pathlib.Path(next_data_base_path)
+                    if not target_base_path.exists():
+                        target_base_path.mkdir(parents=True, exist_ok=True)
+                    enhanced_target_path = os.path.join(next_data_base_path, next_data_file_path)
+                    
+                    # save enhanced target
+                    plt.imsave(enhanced_target_path, 1-enhanced_target, cmap="gray")
+                    
+                    # update path for target to enhenced one
+                    data_path["target"] = enhanced_target_path
+                except:
+                    print(f"Error occured in enhance_target function! target_path: {data_path['target']}")
         
         return dataset
     
@@ -184,22 +187,23 @@ def get_enhanced_target(
                 if W-1 > x_first >= 0 and H-1 > y_first >= 0:
                     v_prev = point_interpolate_from_gray_image(x_first, y_first, distmap_inv_alpha)
                     vtf_df[0] = v_prev
-                for i, (x, y) in enumerate(fp[1:]):
-                    if W-1 > x > 0 and H-1 > y > 0:
-                        v_cur = point_interpolate_from_gray_image(x, y, distmap_inv_alpha)
-                        diff_vtf_dt[i] = np.abs(v_cur - v_prev)
-                        vtf_df[i+1] = v_cur
-                        v_prev = v_cur
-                    else:
-                        diff_vtf_dt[i] = 1
-                        v_prev = 1
+                    
+                    for i, (x, y) in enumerate(fp[1:]):
+                        if W-1 > x >= 0 and H-1 > y >= 0:
+                            v_cur = point_interpolate_from_gray_image(x, y, distmap_inv_alpha)
+                            diff_vtf_dt[i] = np.abs(v_cur - v_prev)
+                            vtf_df[i+1] = v_cur
+                            v_prev = v_cur
+                        else:
+                            diff_vtf_dt[i] = 1
+                            v_prev = 1
                         
-                curvature_similarity = 1 - np.mean(diff_vtf_dt)
-                level_of_misalignment = np.mean(vtf_df)
-                
-                # GT와 가깝고 spatial similarity가 클 수록 similarity가 크다고 볼 수 있음. 
-                # spatial_similarity_map[h, w] = level_of_misalignment * curvature_similarity
-                spatial_similarity_map[h, w] = curvature_similarity
+                    curvature_similarity = 1 - np.mean(diff_vtf_dt)
+                    level_of_misalignment = np.mean(vtf_df)
+                    
+                    # GT와 가깝고 spatial similarity가 클 수록 similarity가 크다고 볼 수 있음. 
+                    # spatial_similarity_map[h, w] = level_of_misalignment * curvature_similarity
+                    spatial_similarity_map[h, w] = curvature_similarity
 
     spatial_sim_mask = spatial_similarity_map > SPATIAL_SIM_THRESHOLD
 
